@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IoT Dashboard</title>
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- Leaflet CDN -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <!-- MQTT.js CDN -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+  <style>
+    #devices-container > div { min-width: 300px; }
+    .toast {
+      z-index: 50;
+      padding: 8px 12px;
+      border-radius: 6px;
+      margin-bottom: 6px;
+      position: fixed;
+      bottom: 1rem;
+      right: 1rem;
+      color: white;
+      font-weight: bold;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+      transition: all 0.3s ease-in-out;
+    }
+    .toast-info { background-color: #3b82f6; }
+    .toast-success { background-color: #16a34a; }
+    .toast-error { background-color: #ef4444; }
+  </style>
+</head>
+<body class="bg-gray-50 font-sans">
+
+  <!-- Navbar -->
+  <header class="bg-white shadow-md sticky top-0 z-10 p-4 flex justify-between items-center">
+    <h1 class="text-2xl font-bold text-blue-600">🌐 IoT Dashboard</h1>
+    <nav class="space-x-4">
+      <button id="btn-devices" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Devices</button>
+      <button id="btn-alerts" class="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700">Alerts</button>
+    </nav>
+  </header>
+
+  <!-- Main container -->
+  <main class="max-w-7xl mx-auto p-6 space-y-6">
+
+    <!-- Device Cards Container -->
+    <div id="devices-container" class="grid gap-6 md:grid-cols-2 lg:grid-cols-3"></div>
+
+    <!-- Alerts -->
+    <div class="bg-white border rounded shadow p-6">
+      <h2 class="text-lg font-semibold text-gray-700 mb-4">🚨 Recent Alerts</h2>
+      <ul id="alerts-list" class="divide-y divide-gray-200">
+        <li class="py-2 text-gray-500">No alerts yet</li>
+      </ul>
+    </div>
+
+  </main>
+
+  <!-- Dashboard JS -->
+  <script src="scripts/dashboard.js"></script>
+
+</body>
+</html>
+
