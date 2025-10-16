@@ -1,199 +1,227 @@
-// dashboard.js
-document.addEventListener("DOMContentLoaded", () => {
-  const devices = {};
-  const alerts = [];
-  const MAX_ALERTS = 20;
+// Toast container
+const toastContainer = document.createElement("div");
+toastContainer.id = "toast-container";
+toastContainer.className = "fixed bottom-4 right-4 flex flex-col gap-2 z-50";
+document.body.appendChild(toastContainer);
 
-  // MQTT WebSocket connection
-  const mqttClient = mqtt.connect("ws://localhost:9001");
+const BROKER_URL = "ws://localhost:9001";
+const client = mqtt.connect(BROKER_URL);
 
-  mqttClient.on("connect", () => {
-    console.log("✅ Connected to MQTT Broker via WebSockets");
-    mqttClient.subscribe("iot/#", (err) => {
-      if (err) console.error("❌ Subscription failed:", err);
-    });
+const devices = {};
+const charts = {};
+const maps = {};
+
+// =================== MQTT CONNECTION ===================
+client.on("connect", () => {
+  console.log("✅ Connected to MQTT Broker");
+  client.subscribe("iot/#", (err) => {
+    if (err) console.error("❌ Subscribe error:", err);
+    else console.log("📡 Subscribed to all iot topics");
   });
+});
 
-  mqttClient.on("message", (topic, message) => {
-    try {
-      const payload = message.toString();
+client.on("error", (err) => console.error("❌ MQTT Error:", err));
+client.on("reconnect", () => console.log("🔄 Reconnecting..."));
+client.on("close", () => console.log("❌ Disconnected"));
 
-      // Alerts
-      if (topic.startsWith("iot/alert/")) {
-        const deviceId = topic.split("/").pop();
-        const alertObj = { id: Date.now(), deviceId, message: payload, timestamp: new Date().toLocaleTimeString() };
-        alerts.unshift(alertObj);
-        if (alerts.length > MAX_ALERTS) alerts.pop();
-        renderAlerts();
-        showToast(payload, "error");
-        return;
-      }
+// =================== HANDLE INCOMING MESSAGES ===================
+client.on("message", (topic, payload) => {
+  try {
+    if (topic.startsWith("iot/status/")) {
+      const data = JSON.parse(payload.toString());
+  
+  // Update the internal devices object
+      if (!devices[data.deviceId]) devices[data.deviceId] = {};
+      devices[data.deviceId].status = data.status;
+      devices[data.deviceId].battery = data.battery;
+      devices[data.deviceId].value = data.value || devices[data.deviceId].value;
+      devices[data.deviceId].unit = data.unit || devices[data.deviceId].unit;
 
-      // Telemetry
-      const data = JSON.parse(payload);
-      if (!devices[data.deviceId]) {
-        devices[data.deviceId] = data;
-        renderDevice(data);
-      } else {
-        Object.assign(devices[data.deviceId], data);
-        updateDeviceCard(data.deviceId);
-      }
+      updateStatusUI(data.deviceId, data.status, data.battery);
+    } 
+    else if (topic.startsWith("iot/alert/")) {
+      const msg = payload.toString();
+      const alertType = msg.startsWith("ALERT")
+        ? "error"
+        : msg.startsWith("INFO")
+        ? "info"
+        : "warn";
 
-    } catch (e) {
-      console.error("❌ Failed to process MQTT message:", e);
+      const colorClass =
+        alertType === "error"
+          ? "text-red-600"
+          : alertType === "info"
+          ? "text-green-600"
+          : "text-yellow-600";
+
+      addAlertToList(msg, colorClass);
+      showToast(msg,alertType);
+    } 
+    else if (topic.startsWith("iot/")) {
+      const data = JSON.parse(payload.toString());
+      updateDeviceUI(data);
     }
-  });
-
-  // ---------------- Toasts & Alerts ----------------
-  function showToast(message, type = "info") {
-    const toast = document.createElement("div");
-    toast.className = `toast toast-${type} fixed bottom-4 right-4 bg-${type === "error" ? "red" : type === "success" ? "green" : "blue"}-500 text-white p-2 rounded shadow`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 4000);
+  } catch (err) {
+    console.error("❌ Message handling error:", err);
   }
+});
 
-  function renderAlerts() {
-    const list = document.getElementById("alerts-list");
-    if (!list) return;
-    list.innerHTML = "";
-    if (!alerts.length) {
-      const li = document.createElement("li");
-      li.className = "no-alerts";
-      li.textContent = "No alerts yet";
-      list.appendChild(li);
-      return;
-    }
-    alerts.forEach(a => {
-      const li = document.createElement("li");
-      li.className = "alert-item py-2";
-      li.innerHTML = `
-        <p><strong>${a.deviceId}</strong>: ${a.message}</p>
-        <p class="text-xs text-gray-400">${a.timestamp}</p>
-      `;
-      list.appendChild(li);
-    });
-  }
+// =================== UPDATE DEVICE UI ===================
+function updateDeviceUI(data) {
+  const { deviceId, type, value, unit, battery, status, timestamp } = data;
+  if (!devices[deviceId]) createDeviceCard(data);
 
-  // ---------------- Devices ----------------
-  const charts = {};
-  const deviceMaps = {};
+  const card = document.getElementById(`card-${deviceId}`);
+  if (!card) return;
 
-  function renderDevice(device) {
-    const container = document.getElementById("devices-container");
-    if (!container) return;
+  const valueEl = card.querySelector(".device-value");
+  valueEl.textContent = `${value} ${unit || ""}`;
 
-    const card = document.createElement("div");
-    card.id = `device-${device.deviceId}`;
-    card.className = "bg-white p-4 rounded shadow space-y-2";
+  updateStatusUI(deviceId, status, battery);
 
-    card.innerHTML = `
-      <h3 class="font-semibold text-lg">${device.deviceId} (${device.type})</h3>
-      <p>Status: <span class="device-status ${device.status === "ONLINE" ? "text-green-600" : "text-red-600"}">${device.status}</span></p>
-      <p>Battery: <span class="battery-bar"><span class="battery-fill bg-green-400 inline-block h-2 rounded" style="width:${device.battery}%"></span> ${device.battery.toFixed(0)}%</span></p>
-      ${device.type === "temperature" || device.type === "heartRate" ? `<canvas id="chart-${device.deviceId}" width="300" height="150"></canvas>` : ""}
-      ${device.type === "gps" ? `
-        <div id="map-${device.deviceId}" class="device-map relative" style="height:300px; border:1px solid #ccc;">
-          <div class="absolute inset-0 flex items-center justify-center text-gray-500 text-sm" id="map-loading-${device.deviceId}">
-            Waiting for GPS data...
-          </div>
-        </div>
-      ` : ""}
-      ${device.type === "bulb" ? `<button class="toggle-bulb px-2 py-1 bg-blue-500 text-white rounded">${device.state === "ON" ? "Turn OFF" : "Turn ON"}</button>` : ""}
-      <p class="last-updated text-xs text-gray-400">Last updated: --:--:--</p>
-    `;
-
-    container.appendChild(card);
-
-    if (device.type === "temperature" || device.type === "heartRate") createChart(device.deviceId);
-    if (device.type === "gps") createMap(device.deviceId);
-
-    if (device.type === "bulb") {
-      const btn = card.querySelector(".toggle-bulb");
-      btn.addEventListener("click", () => {
-        const cmd = device.state === "ON" ? "TURN_OFF" : "TURN_ON";
-        mqttClient.publish(`iot/control/${device.deviceId}`, cmd);
-      });
-    }
-  }
-
-  function updateDeviceCard(deviceId) {
-    const device = devices[deviceId];
-    const card = document.getElementById(`device-${deviceId}`);
-    if (!card) return;
-
-    // Status
-    const statusEl = card.querySelector(".device-status");
-    statusEl.textContent = device.status;
-    statusEl.className = "device-status " + (device.status === "ONLINE" ? "text-green-600" : "text-red-600");
-
-    // Battery
-    const batteryFill = card.querySelector(".battery-fill");
-    batteryFill.style.width = `${device.battery}%`;
-    card.querySelector(".battery-bar span:last-child").textContent = `${device.battery.toFixed(0)}%`;
-
-    // Bulb
-    if (device.type === "bulb") {
-      const btn = card.querySelector(".toggle-bulb");
-      btn.textContent = device.state === "ON" ? "Turn OFF" : "Turn ON";
-    }
-
-    // Charts & Maps
-    if (device.type === "temperature" || device.type === "heartRate") updateChart(deviceId, device.value);
-    if (device.type === "gps") updateMap(deviceId, device.value);
-  }
-
-  // ---------------- Charts ----------------
-  function createChart(deviceId) {
-    const ctx = document.getElementById(`chart-${deviceId}`).getContext("2d");
-    charts[deviceId] = new Chart(ctx, {
-      type: "line",
-      data: { labels: [], datasets: [{ label: deviceId, data: [], borderColor: "blue", fill: false }] },
-      options: { animation: false, scales: { x: { display: true }, y: { beginAtZero: true } } }
-    });
-  }
-
-  function updateChart(deviceId, value) {
-    if (!charts[deviceId] || value === undefined) return;
+  // --- Update chart ---
+  if (charts[deviceId] && type !== "gps" && type !== "bulb") {
     const chart = charts[deviceId];
-    chart.data.labels.push(new Date().toLocaleTimeString());
-    chart.data.datasets[0].data.push(value);
-    if (chart.data.labels.length > 20) {
+    chart.data.labels.push(new Date(timestamp).toLocaleTimeString());
+    chart.data.datasets[0].data.push(parseFloat(value));
+
+    if (chart.data.labels.length > 10) {
       chart.data.labels.shift();
       chart.data.datasets[0].data.shift();
     }
+
     chart.update();
   }
 
-  // ---------------- Maps ----------------
-  function createMap(deviceId) {
-    const div = document.getElementById(`map-${deviceId}`);
-    const map = L.map(div).setView([28.6, 77.2], 13);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OpenStreetMap contributors" }).addTo(map);
-    const marker = L.marker([28.6, 77.2]).addTo(map);
-    deviceMaps[deviceId] = { map, marker, trail: [[28.6, 77.2]], polyline: L.polyline([[28.6, 77.2]], { color: "blue" }).addTo(map) };
-  }
-
-  function updateMap(deviceId, value) {
-    if (!deviceMaps[deviceId] || !value) return;
+  // --- Update GPS ---
+  if (type === "gps" && maps[deviceId]) {
     const [lat, lng] = value.split(",").map(Number);
-    const mapObj = deviceMaps[deviceId];
+    maps[deviceId].marker.setLatLng([lat, lng]);
+    maps[deviceId].map.panTo([lat, lng]);
+  }
+}
 
-    // Hide loading
-    const loadingEl = document.getElementById(`map-loading-${deviceId}`);
-    if (loadingEl) loadingEl.style.display = "none";
+// =================== CREATE DEVICE CARD ===================
+function createDeviceCard(data) {
+  const { deviceId, type } = data;
+  const container = document.getElementById("devices-container");
 
-    mapObj.marker.setLatLng([lat, lng]);
-    mapObj.trail.push([lat, lng]);
-    if (mapObj.trail.length > 10) mapObj.trail.shift();
-    mapObj.polyline.setLatLngs(mapObj.trail);
-    mapObj.map.panTo([lat, lng]);
+  const card = document.createElement("div");
+  card.id = `card-${deviceId}`;
+  card.className = "bg-white rounded-xl shadow p-4 space-y-2 border";
 
-    const card = document.getElementById(`device-${deviceId}`);
-    if(card) card.querySelector(".last-updated").textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
+  card.innerHTML = `
+    <h2 class="text-lg font-semibold text-gray-700">${deviceId}</h2>
+    <p class="text-sm text-gray-500">Type: ${type}</p>
+    <p class="device-value text-2xl font-bold text-blue-600">--</p>
+    <div class="flex justify-between items-center">
+      <span class="device-status text-sm font-semibold px-2 py-1 rounded bg-gray-200 text-gray-700">Unknown</span>
+      <span class="device-battery text-sm">🔋 --%</span>
+    </div>
+    <canvas id="chart-${deviceId}" height="100"></canvas>
+    <div id="map-${deviceId}" class="rounded h-48 hidden"></div>
+  `;
+
+  container.appendChild(card);
+  devices[deviceId] = data;
+
+  // Initialize chart (for non-GPS devices)
+  if (type !== "gps" && type !== "bulb") {
+    const ctx = document.getElementById(`chart-${deviceId}`);
+    charts[deviceId] = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: `${type} data`,
+            data: [],
+            borderWidth: 2,
+            fill: false,
+            tension: 0.2,
+          },
+        ],
+      },
+      options: {
+        scales: { y: { beginAtZero: false } },
+        animation: false,
+      },
+    });
   }
 
-  // Expose globally
-  window.devicesManager = { devices, renderAlerts };
+  // Initialize map (for GPS devices)
+  if (type === "gps") {
+    const mapEl = document.getElementById(`map-${deviceId}`);
+    mapEl.classList.remove("hidden");
+
+    const map = L.map(mapEl).setView([28.6, 77.2], 14);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "© OpenStreetMap contributors",
+    }).addTo(map);
+
+    const marker = L.marker([28.6, 77.2]).addTo(map);
+    maps[deviceId] = { map, marker };
+  }
+}
+
+// =================== STATUS UI ===================
+function updateStatusUI(deviceId, status, battery) {
+  const card = document.getElementById(`card-${deviceId}`);
+  if (!card) return;
+
+  const statusEl = card.querySelector(".device-status");
+  const batteryEl = card.querySelector(".device-battery");
+
+  statusEl.textContent = status;
+  statusEl.className = `device-status font-semibold px-2 py-1 rounded ${
+    status === "ONLINE"
+      ? "bg-green-100 text-green-700"
+      : "bg-red-100 text-red-700"
+  }`;
+
+  batteryEl.textContent = `🔋 ${battery.toFixed(1)}%`;
+  if (battery < 20) batteryEl.classList.add("text-red-600");
+  else batteryEl.classList.remove("text-red-600");
+}
+
+// =================== ALERT LIST ===================
+function addAlertToList(msg, colorClass) {
+  const alertList = document.getElementById("alerts-list");
+  const li = document.createElement("li");
+  li.className = `py-2 ${colorClass}`;
+  li.textContent = msg;
+  alertList.prepend(li);
+
+  if (alertList.children.length > 20) {
+    alertList.removeChild(alertList.lastChild);
+  }
+}
+
+function showToast(message, type = "info") {
+  const toast = document.createElement("div");
+  toast.className = `px-4 py-2 rounded shadow text-white ${
+    type === "error" ? "bg-red-500" : type === "warn" ? "bg-yellow-500" : "bg-blue-500"
+  }`;
+  toast.textContent = message;
+
+  toastContainer.appendChild(toast);
+
+  setTimeout(() => {
+    toast.remove();
+  }, 4000);
+}
+
+// =================== NAV BUTTONS ===================
+document.getElementById("btn-devices").addEventListener("click", () => {
+  document.getElementById("devices-container").style.display = "grid";
+  document.getElementById("alerts-list").parentElement.style.display = "none";
 });
+
+document.getElementById("btn-alerts").addEventListener("click", () => {
+  document.getElementById("devices-container").style.display = "none";
+  document.getElementById("alerts-list").parentElement.style.display = "block";
+});
+
+// Default view: show devices, hide alerts
+document.getElementById("alerts-list").parentElement.style.display = "none";
 
